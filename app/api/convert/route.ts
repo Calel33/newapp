@@ -20,6 +20,36 @@ function isValidUrl(url: string): boolean {
   }
 }
 
+// Clean markdown content before sending response
+function cleanMarkdown(content: string): string {
+  const lines = content.split('\n');
+  let inCodeBlock = false;
+  const cleanedLines = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+
+    // Check for code block markers
+    if (line.includes('```')) {
+      inCodeBlock = !inCodeBlock;
+      cleanedLines.push(line);
+      continue;
+    }
+
+    // Inside code block: remove line numbers and _13 markers
+    if (inCodeBlock) {
+      // Remove _13 and similar markers
+      line = line.replace(/^_?\d+\s*/, '');
+      // Remove any remaining line numbers at start
+      line = line.replace(/^\d+\s*/, '');
+    }
+
+    cleanedLines.push(line);
+  }
+
+  return cleanedLines.join('\n');
+}
+
 export async function POST(req: Request) {
   try {
     // Input validation
@@ -75,7 +105,12 @@ export async function POST(req: Request) {
             if (!line.trim()) continue
             try {
               const jsonData = JSON.parse(line)
-              controller.enqueue(encoder.encode(line + '\n'))
+              // Clean the markdown before sending
+              const cleanedContent = cleanMarkdown(jsonData.content);
+              controller.enqueue(encoder.encode(JSON.stringify({
+                content: cleanedContent,
+                url: jsonData.url
+              }) + '\n'))
             } catch (error) {
               console.error('Error parsing JSON:', error)
             }
