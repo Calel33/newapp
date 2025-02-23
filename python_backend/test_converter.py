@@ -6,6 +6,13 @@ from converter import convert_url_to_markdown, clean_for_json
 import sys
 import json
 import traceback
+import codecs
+
+# Ensure UTF-8 encoding for stdout
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
 
 def safe_json_write(data: dict):
     """Safely write JSON data to stdout"""
@@ -14,17 +21,20 @@ def safe_json_write(data: dict):
         safe_data = {}
         for key, value in data.items():
             if isinstance(value, str):
+                # Additional cleaning for deployment environment
+                value = value.encode('utf-8', errors='ignore').decode('utf-8')
                 safe_data[key] = clean_for_json(value)
             else:
                 safe_data[key] = value
         
-        # Write with ensure_ascii=True for maximum compatibility
-        output = json.dumps(safe_data, ensure_ascii=True)
-        sys.stdout.write(output + '\n')
-        sys.stdout.flush()
+        # Write with explicit encoding settings
+        output = json.dumps(safe_data, ensure_ascii=True, separators=(',', ':'))
+        sys.stdout.buffer.write(output.encode('utf-8') + b'\n')
+        sys.stdout.buffer.flush()
     except Exception as e:
-        sys.stderr.write(f"Error writing JSON: {str(e)}\n")
-        sys.stderr.flush()
+        error_msg = f"Error writing JSON: {str(e)}"
+        sys.stderr.buffer.write(error_msg.encode('utf-8') + b'\n')
+        sys.stderr.buffer.flush()
 
 def progress_callback(progress: float, message: str):
     """Simple progress callback for testing"""

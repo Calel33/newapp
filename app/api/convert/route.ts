@@ -79,8 +79,14 @@ export async function POST(req: Request) {
         // Path to Python script
         const scriptPath = path.join(process.cwd(), 'python_backend', 'test_converter.py')
         
-        // Spawn Python process
-        const pythonProcess = spawn('python', [scriptPath, url])
+        // Spawn Python process with explicit encoding
+        const pythonProcess = spawn('python', [scriptPath, url], {
+          env: {
+            ...process.env,
+            PYTHONIOENCODING: 'utf-8',
+            PYTHONUNBUFFERED: '1'
+          }
+        })
         
         let buffer = ''
 
@@ -96,21 +102,26 @@ export async function POST(req: Request) {
         // Handle progress updates
         pythonProcess.stdout.on('data', (data) => {
           try {
-            // Convert Buffer to string and concatenate with existing buffer
-            buffer += data.toString('utf-8')
+            // Convert Buffer to string with explicit utf-8 encoding
+            const chunk = data.toString('utf-8')
+            buffer += chunk
             
             // Process complete lines
-            let lines = buffer.split('\n')
-            
-            // Keep the last (potentially incomplete) line in the buffer
+            const lines = buffer.split('\n')
             buffer = lines.pop() || ''
             
             for (const line of lines) {
               if (!line.trim()) continue
               
               try {
-                // Parse and validate JSON
-                const jsonData = JSON.parse(line)
+                // Parse and validate JSON with explicit reviver
+                const jsonData = JSON.parse(line, (key, value) => {
+                  if (typeof value === 'string') {
+                    // Handle any potential invalid JSON characters
+                    return value.replace(/[\u0000-\u0019]+/g, '')
+                  }
+                  return value
+                })
                 
                 // Handle progress updates
                 if (jsonData.progress !== undefined && jsonData.message) {
@@ -169,7 +180,13 @@ export async function POST(req: Request) {
           clearTimeout(timeoutId)
           if (buffer.trim()) {
             try {
-              const finalData = JSON.parse(buffer)
+              const finalData = JSON.parse(buffer, (key, value) => {
+                if (typeof value === 'string') {
+                  // Handle any potential invalid JSON characters
+                  return value.replace(/[\u0000-\u0019]+/g, '')
+                }
+                return value
+              })
               if (finalData.markdown) {
                 const cleanedContent = cleanMarkdown(finalData.markdown)
                 controller.enqueue(encoder.encode(JSON.stringify({
