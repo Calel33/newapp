@@ -104,15 +104,27 @@ export async function POST(req: Request) {
           for (const line of lines) {
             if (!line.trim()) continue
             try {
+              // Ensure we have valid JSON by checking for complete object
+              if (!line.endsWith('}')) continue;
+              
               const jsonData = JSON.parse(line)
               // Clean the markdown before sending
-              const cleanedContent = cleanMarkdown(jsonData.content);
-              controller.enqueue(encoder.encode(JSON.stringify({
-                content: cleanedContent,
-                url: jsonData.url
-              }) + '\n'))
+              if (typeof jsonData.content === 'string') {
+                const cleanedContent = cleanMarkdown(jsonData.content);
+                controller.enqueue(encoder.encode(JSON.stringify({
+                  content: cleanedContent,
+                  url: jsonData.url
+                }) + '\n'))
+              } else {
+                console.error('Invalid content format:', jsonData)
+              }
             } catch (error) {
-              console.error('Error parsing JSON:', error)
+              console.error('Error parsing JSON:', error, '\nLine:', line)
+              // Send error to client
+              controller.enqueue(encoder.encode(JSON.stringify({
+                error: 'Error occurred during conversion',
+                details: 'Invalid JSON data received'
+              }) + '\n'))
             }
           }
         })

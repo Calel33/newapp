@@ -101,26 +101,32 @@ class DocsConverter:
 
     def convert_to_markdown(self, soup: BeautifulSoup) -> str:
         """
-        Convert HTML to Markdown
+        Convert cleaned HTML to Markdown
         
         Args:
-            soup: BeautifulSoup object to convert
+            soup: Cleaned BeautifulSoup object
             
         Returns:
-            Markdown content as string
+            Markdown string
             
         Raises:
             ConversionError: If conversion fails
         """
         try:
-            self._update_progress(70, "Converting to Markdown...")
-            # Find main content area if possible
-            main_content = soup.find(['main', 'article', 'div[role="main"]'])
-            if main_content:
-                return md(str(main_content))
-            return md(str(soup))
+            self._update_progress(70, "Converting to markdown...")
+            # Convert to markdown with proper escaping
+            content = md(str(soup), escape_underscores=True, escape_asterisks=True)
+            
+            # Ensure content is properly escaped for JSON
+            content = content.replace('\\', '\\\\')  # Escape backslashes
+            content = content.replace('"', '\\"')    # Escape quotes
+            content = content.replace('\n', '\\n')   # Escape newlines
+            content = content.replace('\r', '\\r')   # Escape carriage returns
+            content = content.replace('\t', '\\t')   # Escape tabs
+            
+            return content
         except Exception as e:
-            raise ConversionError(f"Failed to convert to Markdown: {str(e)}")
+            raise ConversionError(f"Failed to convert to markdown: {str(e)}")
 
     def convert(self, url: str) -> Dict[str, str]:
         """
