@@ -15,29 +15,60 @@ class ConversionError(Exception):
     """Custom exception for conversion errors"""
     pass
 
-class JSONEncoder(json.JSONEncoder):
-    """Custom JSON encoder to handle special characters"""
-    def encode(self, obj):
-        if isinstance(obj, str):
-            # Replace problematic characters
-            obj = obj.replace('\u2028', '\\u2028')
-            obj = obj.replace('\u2029', '\\u2029')
-            # Handle other potential JSON-breaking characters
-            obj = re.sub(r'[\x00-\x1F\x7F-\x9F]', lambda m: f'\\u{ord(m.group(0)):04x}', obj)
-        return super().encode(obj)
+def clean_for_json(text: str) -> str:
+    """Clean text to make it safe for JSON encoding"""
+    if not isinstance(text, str):
+        text = str(text)
+        
+    # Replace JSON-breaking characters
+    text = text.replace('\\', '\\\\')  # Must be first
+    text = text.replace('"', '\\"')
+    text = text.replace('\b', '\\b')
+    text = text.replace('\f', '\\f')
+    text = text.replace('\n', '\\n')
+    text = text.replace('\r', '\\r')
+    text = text.replace('\t', '\\t')
+    
+    # Handle other control characters
+    text = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', text)
+    
+    # Handle Unicode line/paragraph separators
+    text = text.replace('\u2028', ' ')
+    text = text.replace('\u2029', ' ')
+    
+    return text
+
+def chunk_content(content: str, chunk_size: int = 5000) -> list:
+    """Split content into manageable chunks"""
+    chunks = []
+    current_chunk = []
+    current_size = 0
+    
+    for line in content.split('\n'):
+        line_size = len(line)
+        if current_size + line_size > chunk_size and current_chunk:
+            chunks.append('\n'.join(current_chunk))
+            current_chunk = [line]
+            current_size = line_size
+        else:
+            current_chunk.append(line)
+            current_size += line_size
+    
+    if current_chunk:
+        chunks.append('\n'.join(current_chunk))
+    
+    return chunks
 
 class DocsConverter:
     def __init__(self, progress_callback: Optional[Callable[[int, str], None]] = None):
-        """Initialize converter with custom JSON encoder"""
         self.progress_callback = progress_callback
-        self.json_encoder = JSONEncoder(ensure_ascii=True)
 
     def _update_progress(self, progress: int, message: str):
-        """Update conversion progress with safe JSON encoding"""
+        """Update conversion progress"""
         if self.progress_callback:
             try:
-                safe_message = self.json_encoder.encode(message)
-                self.progress_callback(progress, json.loads(safe_message))
+                safe_message = clean_for_json(message)
+                self.progress_callback(progress, safe_message)
             except Exception as e:
                 print(f"Progress update error: {str(e)}", file=sys.stderr)
 
@@ -112,27 +143,35 @@ class DocsConverter:
         return soup
 
     def convert_to_markdown(self, soup: BeautifulSoup) -> str:
-        """Convert cleaned HTML to Markdown with safe JSON encoding"""
+        """Convert cleaned HTML to Markdown"""
         try:
             self._update_progress(70, "Converting to markdown...")
             
             # Convert to markdown
             content = md(str(soup), escape_underscores=True, escape_asterisks=True)
             
-            # Ensure content is a string
-            if not isinstance(content, str):
-                content = str(content)
-
-            # Use custom JSON encoder to safely encode the content
-            encoded_content = self.json_encoder.encode(content)
-            # Remove surrounding quotes added by JSON encoder
-            return json.loads(encoded_content)
+            # Clean and chunk the content
+            cleaned_content = clean_for_json(content)
+            chunks = chunk_content(cleaned_content)
+            
+            # Process chunks and combine
+            processed_chunks = []
+            total_chunks = len(chunks)
+            
+            for i, chunk in enumerate(chunks, 1):
+                self._update_progress(
+                    70 + (20 * i // total_chunks),
+                    f"Processing chunk {i}/{total_chunks}"
+                )
+                processed_chunks.append(chunk)
+            
+            return '\n'.join(processed_chunks)
             
         except Exception as e:
             raise ConversionError(f"Failed to convert to markdown: {str(e)}")
 
     def convert(self, url: str) -> Dict[str, str]:
-        """Convert document at URL to markdown with safe JSON encoding"""
+        """Convert document at URL to markdown"""
         try:
             html = self.fetch_content(url)
             soup = self.parse_html(html)
@@ -143,20 +182,23 @@ class DocsConverter:
             title = ""
             title_tag = cleaned_soup.find('title')
             if title_tag and title_tag.string:
-                # Use custom JSON encoder for title
-                encoded_title = self.json_encoder.encode(title_tag.string)
-                title = json.loads(encoded_title)
+                title = clean_for_json(title_tag.string)
             
             self._update_progress(100, "Conversion complete")
             
-            # Use custom JSON encoder for final output
             result = {
                 "markdown": markdown,
                 "title": title,
                 "url": url
             }
             
-            return json.loads(self.json_encoder.encode(result))
+            # Final safety check
+            try:
+                # Test if the result can be JSON encoded
+                json.dumps(result)
+                return result
+            except Exception as json_error:
+                raise ConversionError(f"Failed to encode result as JSON: {str(json_error)}")
             
         except Exception as e:
             raise ConversionError(f"Conversion failed: {str(e)}")
