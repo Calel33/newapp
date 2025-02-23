@@ -95,37 +95,72 @@ export async function POST(req: Request) {
 
         // Handle progress updates
         pythonProcess.stdout.on('data', (data) => {
-          buffer += data.toString()
-          
-          // Process complete lines
-          const lines = buffer.split('\n')
-          buffer = lines.pop() || '' // Keep the last incomplete line in buffer
-          
-          for (const line of lines) {
-            if (!line.trim()) continue
-            try {
-              // Ensure we have valid JSON by checking for complete object
-              if (!line.endsWith('}')) continue;
+          try {
+            // Convert Buffer to string and concatenate with existing buffer
+            buffer += data.toString('utf-8')
+            
+            // Process complete lines
+            let lines = buffer.split('\n')
+            
+            // Keep the last (potentially incomplete) line in the buffer
+            buffer = lines.pop() || ''
+            
+            for (const line of lines) {
+              if (!line.trim()) continue
               
-              const jsonData = JSON.parse(line)
-              // Clean the markdown before sending
-              if (typeof jsonData.content === 'string') {
-                const cleanedContent = cleanMarkdown(jsonData.content);
+              try {
+                // Parse and validate JSON
+                const jsonData = JSON.parse(line)
+                
+                // Handle progress updates
+                if (jsonData.progress !== undefined && jsonData.message) {
+                  controller.enqueue(encoder.encode(JSON.stringify(jsonData) + '\n'))
+                  continue
+                }
+                
+                // Handle markdown content
+                if (jsonData.markdown) {
+                  const cleanedContent = cleanMarkdown(jsonData.markdown)
+                  controller.enqueue(encoder.encode(JSON.stringify({
+                    content: cleanedContent,
+                    title: jsonData.title || '',
+                    url: jsonData.source_url
+                  }) + '\n'))
+                  continue
+                }
+                
+                // Handle errors
+                if (jsonData.error) {
+                  controller.enqueue(encoder.encode(JSON.stringify({
+                    error: jsonData.error,
+                    details: jsonData.details || 'No additional details'
+                  }) + '\n'))
+                  continue
+                }
+                
+              } catch (parseError: unknown) {
+                const errorMessage = parseError instanceof Error ? 
+                  parseError.message : 
+                  'Unknown error occurred during JSON parsing'
+                
+                console.error('Error parsing JSON line:', parseError)
+                console.error('Problematic line:', line)
                 controller.enqueue(encoder.encode(JSON.stringify({
-                  content: cleanedContent,
-                  url: jsonData.url
+                  error: 'Error parsing conversion output',
+                  details: `Invalid JSON data received: ${errorMessage}`
                 }) + '\n'))
-              } else {
-                console.error('Invalid content format:', jsonData)
               }
-            } catch (error) {
-              console.error('Error parsing JSON:', error, '\nLine:', line)
-              // Send error to client
-              controller.enqueue(encoder.encode(JSON.stringify({
-                error: 'Error occurred during conversion',
-                details: 'Invalid JSON data received'
-              }) + '\n'))
             }
+          } catch (streamError: unknown) {
+            const errorMessage = streamError instanceof Error ? 
+              streamError.message : 
+              'Unknown stream processing error'
+            
+            console.error('Stream processing error:', streamError)
+            controller.enqueue(encoder.encode(JSON.stringify({
+              error: 'Stream processing error',
+              details: errorMessage
+            }) + '\n'))
           }
         })
 
@@ -134,9 +169,25 @@ export async function POST(req: Request) {
           clearTimeout(timeoutId)
           if (buffer.trim()) {
             try {
-              controller.enqueue(encoder.encode(buffer + '\n'))
-            } catch (error) {
-              console.error('Error sending final buffer:', error)
+              const finalData = JSON.parse(buffer)
+              if (finalData.markdown) {
+                const cleanedContent = cleanMarkdown(finalData.markdown)
+                controller.enqueue(encoder.encode(JSON.stringify({
+                  content: cleanedContent,
+                  title: finalData.title || '',
+                  url: finalData.source_url
+                }) + '\n'))
+              }
+            } catch (error: unknown) {
+              const errorMessage = error instanceof Error ? 
+                error.message : 
+                'Unknown error processing final buffer'
+              
+              console.error('Error processing final buffer:', error)
+              controller.enqueue(encoder.encode(JSON.stringify({
+                error: 'Error processing final data',
+                details: errorMessage
+              }) + '\n'))
             }
           }
           controller.close()
@@ -146,9 +197,19 @@ export async function POST(req: Request) {
         pythonProcess.on('error', (error) => {
           clearTimeout(timeoutId)
           controller.enqueue(encoder.encode(JSON.stringify({
-            error: 'Failed to start conversion process'
+            error: 'Failed to start conversion process',
+            details: error.message
           }) + '\n'))
           controller.close()
+        })
+
+        // Handle stderr
+        pythonProcess.stderr.on('data', (data) => {
+          console.error('Python process error:', data.toString())
+          controller.enqueue(encoder.encode(JSON.stringify({
+            error: 'Python process error',
+            details: data.toString()
+          }) + '\n'))
         })
       }
     })
@@ -162,10 +223,14 @@ export async function POST(req: Request) {
       }
     })
 
-  } catch (error) {
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? 
+      error.message : 
+      'Unknown error occurred during conversion'
+    
     console.error('Conversion error:', error)
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: 'Internal server error', details: errorMessage },
       { status: 500 }
     )
   }

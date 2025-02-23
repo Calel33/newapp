@@ -44,7 +44,7 @@ class DocsConverter:
         """
         try:
             self._update_progress(10, "Fetching document...")
-            response = requests.get(url)
+            response = requests.get(url, timeout=30)
             response.raise_for_status()
             return response.text
         except requests.RequestException as e:
@@ -114,57 +114,58 @@ class DocsConverter:
         """
         try:
             self._update_progress(70, "Converting to markdown...")
-            # Convert to markdown with proper escaping
+            
+            # Convert to markdown
             content = md(str(soup), escape_underscores=True, escape_asterisks=True)
             
-            # Ensure content is properly escaped for JSON
-            content = content.replace('\\', '\\\\')  # Escape backslashes
-            content = content.replace('"', '\\"')    # Escape quotes
-            content = content.replace('\n', '\\n')   # Escape newlines
-            content = content.replace('\r', '\\r')   # Escape carriage returns
-            content = content.replace('\t', '\\t')   # Escape tabs
+            # Handle potential JSON-breaking characters
+            if not isinstance(content, str):
+                content = str(content)
+                
+            # Use Python's built-in JSON string escaping
+            content = json.dumps(content)[1:-1]  # Remove the surrounding quotes
             
             return content
+            
         except Exception as e:
             raise ConversionError(f"Failed to convert to markdown: {str(e)}")
 
     def convert(self, url: str) -> Dict[str, str]:
         """
-        Convert documentation from URL to Markdown
+        Convert document at URL to markdown
         
         Args:
-            url: URL of documentation to convert
+            url: URL to convert
             
         Returns:
             Dictionary with markdown content and metadata
             
         Raises:
-            ConversionError: If any step fails
+            ConversionError: If conversion fails
         """
         try:
-            self._update_progress(0, "Starting conversion...")
-            
-            # Fetch content
             html = self.fetch_content(url)
-            
-            # Parse HTML
             soup = self.parse_html(html)
-            
-            # Clean content
             cleaned_soup = self.clean_content(soup)
-            
-            # Convert to Markdown
             markdown = self.convert_to_markdown(cleaned_soup)
             
-            # Get title
-            title = cleaned_soup.title.string if cleaned_soup.title else "Converted Document"
+            # Get title if available
+            title = ""
+            title_tag = cleaned_soup.find('title')
+            if title_tag:
+                title = title_tag.string or ""
             
-            self._update_progress(100, "Conversion complete!")
+            # Ensure all text is JSON-safe
+            if not isinstance(title, str):
+                title = str(title)
+            title = json.dumps(title)[1:-1]  # Remove the surrounding quotes
+            
+            self._update_progress(100, "Conversion complete")
             
             return {
-                "title": title.strip(),
-                "markdown": markdown.strip(),
-                "source_url": url
+                "markdown": markdown,
+                "title": title,
+                "url": url
             }
             
         except Exception as e:
