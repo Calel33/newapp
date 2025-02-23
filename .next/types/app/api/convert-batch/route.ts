@@ -1,8 +1,8 @@
-// File: C:\Users\user1\Desktop\finial folder\aiprojects\newapp\app\api\convert\route.ts
-import * as entry from '../../../../../app/api/convert/route.js'
+// File: C:\Users\user1\Desktop\finial folder\aiprojects\newapp\app\api\convert-batch\route.ts
+import * as entry from '../../../../../app/api/convert-batch/route.js'
 import type { NextRequest } from 'next/server.js'
 
-type TEntry = typeof import('../../../../../app/api/convert/route.js')
+type TEntry = typeof import('../../../../../app/api/convert-batch/route.js')
 
 type SegmentParams<T extends Object = any> = T extends Record<string, any>
   ? { [K in keyof T]: T[K] extends string ? string | string[] | undefined : never }

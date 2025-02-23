@@ -43,6 +43,30 @@ export async function* convertToMarkdown(url: string): AsyncGenerator<Conversion
     throw new ConversionError(error.error || 'Failed to convert document')
   }
 
+  yield* processStream(response)
+}
+
+export async function* convertBatchToMarkdown(urls: string[]): AsyncGenerator<ConversionUpdate, void, unknown> {
+  const response = await fetch('/api/convert-batch', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ urls }),
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    if (response.status === 429) {
+      throw new ConversionError(error.error, error.retryAfter)
+    }
+    throw new ConversionError(error.error || 'Failed to convert documents')
+  }
+
+  yield* processStream(response)
+}
+
+async function* processStream(response: Response): AsyncGenerator<ConversionUpdate, void, unknown> {
   const reader = response.body?.getReader()
   if (!reader) {
     throw new ConversionError('Failed to read response')

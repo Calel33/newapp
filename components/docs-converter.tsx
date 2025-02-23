@@ -1,28 +1,30 @@
 'use client'
 
 import React from 'react'
-import { AlertCircle, Copy, Download, Loader2 } from 'lucide-react'
+import { AlertCircle, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { useToast } from '@/components/ui/use-toast'
 import { ConvertedContentCard } from '@/components/ConvertedContentCard'
-import { convertToMarkdown, ConversionError, type ConversionProgress, type ConversionResult } from '@/lib/api-client'
+import { UrlInputList } from '@/components/url-input-list'
+import { convertBatchToMarkdown, ConversionError, type ConversionProgress, type ConversionResult } from '@/lib/api-client'
 
 export function DocsConverter() {
-  const [url, setUrl] = React.useState('')
+  const [urls, setUrls] = React.useState<string[]>([''])
   const [isConverting, setIsConverting] = React.useState(false)
   const [progress, setProgress] = React.useState<ConversionProgress>({ progress: 0, message: '' })
-  const [result, setResult] = React.useState<ConversionResult | null>(null)
+  const [results, setResults] = React.useState<ConversionResult[]>([])
   const [error, setError] = React.useState<{ message: string; retryAfter?: number } | null>(null)
   const { toast } = useToast()
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    if (!url) {
+    const validUrls = urls.filter(url => url.trim() !== '')
+    
+    if (validUrls.length === 0) {
       toast({
         title: 'Error',
-        description: 'Please enter a valid URL',
+        description: 'Please enter at least one valid URL',
         variant: 'destructive',
       })
       return
@@ -30,21 +32,21 @@ export function DocsConverter() {
 
     setIsConverting(true)
     setProgress({ progress: 0, message: 'Starting conversion...' })
-    setResult(null)
+    setResults([])
     setError(null)
 
     try {
-      for await (const update of convertToMarkdown(url)) {
+      for await (const update of convertBatchToMarkdown(validUrls)) {
         if ('progress' in update) {
           setProgress(update)
         } else if ('markdown' in update) {
-          setResult(update)
-          toast({
-            title: 'Success',
-            description: 'Document converted successfully!',
-          })
+          setResults(prev => [...prev, update])
         }
       }
+      toast({
+        title: 'Success',
+        description: 'Documents converted successfully!',
+      })
     } catch (err) {
       if (err instanceof ConversionError) {
         setError({
@@ -71,7 +73,7 @@ export function DocsConverter() {
         })
         toast({
           title: 'Error',
-          description: 'An unexpected error occurred while converting the document',
+          description: 'An unexpected error occurred while converting the documents',
           variant: 'destructive',
         })
       }
@@ -80,77 +82,31 @@ export function DocsConverter() {
     }
   }
 
-  const handleCopy = async () => {
-    if (!result?.markdown) return
-    try {
-      await navigator.clipboard.writeText(result.markdown)
-      toast({
-        title: 'Copied!',
-        description: 'Markdown content copied to clipboard',
-      })
-    } catch (err) {
-      toast({
-        title: 'Error',
-        description: 'Failed to copy to clipboard',
-        variant: 'destructive',
-      })
-    }
-  }
-
-  const handleDownload = () => {
-    if (!result?.markdown) return
-    
-    // Get the last part of the URL path and clean it for use as filename
-    const urlPath = new URL(url).pathname
-    const lastPathSegment = urlPath.split('/').filter(Boolean).pop() || 'converted-doc'
-    const filename = `${lastPathSegment.replace(/[^a-z0-9-]/gi, '-').toLowerCase()}.md`
-    
-    const blob = new Blob([result.markdown], { type: 'text/markdown' })
-    const downloadUrl = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = downloadUrl
-    a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(downloadUrl)
-    
-    toast({
-      title: 'Downloaded',
-      description: `Saved as ${filename}`,
-    })
-  }
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="flex gap-4">
-          <Input
-            type="url"
-            placeholder="Enter documentation URL..."
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            disabled={isConverting}
-          />
-          <Button type="submit" disabled={isConverting}>
-            {isConverting ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Converting...
-              </>
-            ) : (
-              'Convert'
-            )}
-          </Button>
-        </div>
-
-        {isConverting && (
-          <div className="space-y-2">
-            <Progress value={progress.progress * 100} />
-            <p className="text-sm text-muted-foreground">{progress.message}</p>
-          </div>
-        )}
+        <UrlInputList urls={urls} onChange={setUrls} />
+        
+        <Button
+          type="submit"
+          className="w-full"
+          disabled={isConverting}
+        >
+          {isConverting && (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          )}
+          {isConverting ? 'Converting...' : 'Convert to Markdown'}
+        </Button>
       </form>
+
+      {isConverting && (
+        <div className="space-y-2">
+          <Progress value={progress.progress} />
+          <p className="text-sm text-muted-foreground text-center">
+            {progress.message}
+          </p>
+        </div>
+      )}
 
       {error && (
         <div className="flex items-center gap-2 text-destructive">
@@ -159,23 +115,16 @@ export function DocsConverter() {
         </div>
       )}
 
-      {result && (
+      {results.length > 0 && (
         <div className="space-y-4">
-          <ConvertedContentCard
-            siteName={new URL(url).hostname}
-            content={result.markdown}
-          />
-          
-          <div className="flex gap-2">
-            <Button onClick={handleCopy} className="gap-2">
-              <Copy className="h-4 w-4" />
-              Copy
-            </Button>
-            <Button onClick={handleDownload} className="gap-2">
-              <Download className="h-4 w-4" />
-              Download
-            </Button>
-          </div>
+          {results.map((result, index) => (
+            <ConvertedContentCard
+              key={index}
+              title={result.title}
+              markdown={result.markdown}
+              sourceUrl={result.source_url}
+            />
+          ))}
         </div>
       )}
     </div>
