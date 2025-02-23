@@ -9,10 +9,16 @@ import { ConvertedContentCard } from '@/components/ConvertedContentCard'
 import { UrlInputList } from '@/components/url-input-list'
 import { ConversionStatus } from '@/components/conversion-status'
 
+interface ConvertedContent {
+  title: string;
+  markdown: string;
+  sourceUrl?: string;
+}
+
 export function DocsConverter() {
   const [urls, setUrls] = React.useState<string[]>([''])
   const [isConverting, setIsConverting] = React.useState(false)
-  const [convertedContent, setConvertedContent] = React.useState([])
+  const [convertedContent, setConvertedContent] = React.useState<ConvertedContent[]>([])
   const [error, setError] = React.useState<{ message: string } | null>(null)
   const [conversionProgress, setConversionProgress] = React.useState(0)
   const { toast } = useToast()
