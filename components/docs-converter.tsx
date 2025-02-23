@@ -7,79 +7,82 @@ import { Progress } from '@/components/ui/progress'
 import { useToast } from '@/components/ui/use-toast'
 import { ConvertedContentCard } from '@/components/ConvertedContentCard'
 import { UrlInputList } from '@/components/url-input-list'
-import { convertBatchToMarkdown, ConversionError, type ConversionProgress, type ConversionResult } from '@/lib/api-client'
+import { ConversionStatus } from '@/components/conversion-status'
 
 export function DocsConverter() {
   const [urls, setUrls] = React.useState<string[]>([''])
   const [isConverting, setIsConverting] = React.useState(false)
-  const [progress, setProgress] = React.useState<ConversionProgress>({ progress: 0, message: '' })
-  const [results, setResults] = React.useState<ConversionResult[]>([])
-  const [error, setError] = React.useState<{ message: string; retryAfter?: number } | null>(null)
+  const [convertedContent, setConvertedContent] = React.useState([])
+  const [error, setError] = React.useState<{ message: string } | null>(null)
+  const [conversionProgress, setConversionProgress] = React.useState(0)
   const { toast } = useToast()
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
-    const validUrls = urls.filter(url => url.trim() !== '')
-    
-    if (validUrls.length === 0) {
-      toast({
-        title: 'Error',
-        description: 'Please enter at least one valid URL',
-        variant: 'destructive',
-      })
-      return
-    }
-
-    setIsConverting(true)
-    setProgress({ progress: 0, message: 'Starting conversion...' })
-    setResults([])
-    setError(null)
+    e.preventDefault();
+    setIsConverting(true);
+    setError(null);
+    setConvertedContent([]);
+    setConversionProgress(0);
 
     try {
-      for await (const update of convertBatchToMarkdown(validUrls)) {
-        if ('progress' in update) {
-          setProgress(update)
-        } else if ('markdown' in update) {
-          setResults(prev => [...prev, update])
+      const response = await fetch('/api/convert-batch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ urls }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('Failed to get response reader');
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = new TextDecoder().decode(value);
+        const lines = chunk.split('\n').filter(Boolean);
+
+        for (const line of lines) {
+          const data = JSON.parse(line);
+          
+          if (data.type === 'update') {
+            const update = data.data;
+            
+            if (update.status === 'progress') {
+              setConversionProgress(update.progress);
+            } else if (update.status === 'done') {
+              setConvertedContent(prev => [...prev, {
+                title: update.title || 'Converted Document',
+                markdown: update.content,
+                sourceUrl: update.sourceUrl,
+              }]);
+              setConversionProgress(100);
+            } else if (update.status === 'error') {
+              setError(update.error);
+            }
+          }
         }
       }
-      toast({
-        title: 'Success',
-        description: 'Documents converted successfully!',
-      })
-    } catch (err) {
-      if (err instanceof ConversionError) {
-        setError({
-          message: err.message,
-          retryAfter: err.retryAfter,
-        })
-        
-        if (err.retryAfter) {
-          toast({
-            title: 'Rate Limited',
-            description: `Please try again in ${err.retryAfter} seconds`,
-            variant: 'destructive',
-          })
-        } else {
-          toast({
-            title: 'Error',
-            description: err.message,
-            variant: 'destructive',
-          })
-        }
-      } else {
-        setError({
-          message: 'An unexpected error occurred',
-        })
-        toast({
-          title: 'Error',
-          description: 'An unexpected error occurred while converting the documents',
-          variant: 'destructive',
-        })
-      }
+
+    } catch (error) {
+      setError(error instanceof Error ? { message: error.message } : { message: 'Failed to convert documents' });
     } finally {
-      setIsConverting(false)
+      setIsConverting(false);
     }
+  }
+
+  const getConversionStatus = () => {
+    if (error) return 'error';
+    if (isConverting) return 'converting';
+    if (convertedContent.length > 0) return 'success';
+    return 'idle';
   }
 
   return (
@@ -99,30 +102,21 @@ export function DocsConverter() {
         </Button>
       </form>
 
-      {isConverting && (
-        <div className="space-y-2">
-          <Progress value={progress.progress} />
-          <p className="text-sm text-muted-foreground text-center">
-            {progress.message}
-          </p>
-        </div>
-      )}
+      <ConversionStatus 
+        status={getConversionStatus()}
+        progress={conversionProgress}
+        message={error?.message}
+      />
 
-      {error && (
-        <div className="flex items-center gap-2 text-destructive">
-          <AlertCircle className="h-4 w-4" />
-          <p className="text-sm">{error.message}</p>
-        </div>
-      )}
-
-      {results.length > 0 && (
+      {convertedContent.length > 0 && (
         <div className="space-y-4">
-          {results.map((result, index) => (
+          {convertedContent.map((result, index) => (
             <ConvertedContentCard
               key={index}
               title={result.title}
               markdown={result.markdown}
-              sourceUrl={result.source_url}
+              sourceUrl={result.sourceUrl}
+              defaultOpen={false}
             />
           ))}
         </div>
