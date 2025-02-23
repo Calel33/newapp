@@ -90,21 +90,32 @@ const markdownComponents: Components = {
     }
 
     const match = /language-(\w+)/.exec(className || '');
-    // Don't wrap in div, use pre directly
     return (
-      <pre className="overflow-x-auto p-4 bg-gray-100 dark:bg-gray-800 rounded-lg mb-4">
-        <code className={className} {...props}>
-          {content}
-        </code>
-      </pre>
+      <code className={className} {...props}>
+        {content}
+      </code>
     );
   },
   
-  pre: ({ children, ...props }: MarkdownComponentProps) => (
-    <div className="not-prose mb-4" {...props}>
-      {children}
-    </div>
-  ),
+  pre: ({ children, ...props }: MarkdownComponentProps) => {
+    // Check if children is a code element
+    const codeElement = React.Children.toArray(children).find(
+      child => React.isValidElement(child) && child.type === 'code'
+    );
+
+    if (!codeElement) {
+      return <pre {...props}>{children}</pre>;
+    }
+
+    // Render code blocks with proper styling
+    return (
+      <div className="not-prose my-4">
+        <pre className="overflow-x-auto p-4 bg-gray-100 dark:bg-gray-800 rounded-lg" {...props}>
+          {children}
+        </pre>
+      </div>
+    );
+  },
   
   a: ({ href, children, ...props }: MarkdownComponentProps & { href?: string }) => {
     if (!href) return <span {...props}>{children}</span>;

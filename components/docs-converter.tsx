@@ -19,6 +19,17 @@ export function DocsConverter() {
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    
+    // Don't submit if no URLs or only empty URLs
+    if (!urls.some(url => url.trim())) {
+      toast({
+        title: "No URLs to convert",
+        description: "Please enter at least one valid URL.",
+        variant: "destructive",
+      });
+      return;
+    }
+    
     setIsConverting(true);
     setError(null);
     setConvertedContent([]);

@@ -17,7 +17,8 @@ export function UrlInputList({ urls, onChange }: UrlInputListProps) {
     onChange(newUrls)
   }
 
-  const addUrl = () => {
+  const addUrl = (e: React.MouseEvent) => {
+    e.preventDefault()
     if (urls.length < 10) {
       onChange([...urls, ''])
     }
@@ -39,19 +40,31 @@ export function UrlInputList({ urls, onChange }: UrlInputListProps) {
             placeholder="Enter URL"
             className="flex-1"
           />
-          {urls.length > 1 && (
+          {index === urls.length - 1 && urls.length < 10 ? (
             <Button
+              type="button"
               variant="ghost"
               size="icon"
-              onClick={() => removeUrl(index)}
+              onClick={addUrl}
               className="shrink-0"
             >
-              <X className="h-4 w-4" />
+              <Plus className="h-4 w-4" />
             </Button>
+          ) : (
+            urls.length > 1 && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => removeUrl(index)}
+                className="shrink-0"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            )
           )}
         </div>
       ))}
-      {urls.length < 10 && (
+      {urls.length < 10 && urls.length > 0 ? null : (
         <Button
           variant="outline"
           className="w-full"
