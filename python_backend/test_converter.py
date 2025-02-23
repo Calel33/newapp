@@ -2,7 +2,7 @@
 Test script for the DocsConverter
 """
 
-from converter import convert_url_to_markdown
+from converter import convert_url_to_markdown, JSONEncoder
 import sys
 import json
 import traceback
@@ -14,16 +14,14 @@ def sanitize_for_json(text: str) -> str:
     return text.encode('unicode_escape').decode('utf-8')
 
 def progress_callback(progress: float, message: str):
-    """Simple progress callback for testing"""
+    """Simple progress callback for testing with safe JSON encoding"""
     try:
-        # Ensure message is JSON-safe
-        safe_message = sanitize_for_json(message)
-        # Print as JSON for easy parsing by Node.js
-        # Use sys.stdout.write to ensure atomic writes
-        output = json.dumps({
+        # Use custom JSON encoder for all output
+        encoder = JSONEncoder(ensure_ascii=True)
+        output = encoder.encode({
             "progress": progress,
-            "message": safe_message
-        }, ensure_ascii=True)
+            "message": message
+        })
         sys.stdout.write(output + '\n')
         sys.stdout.flush()
     except Exception as e:
@@ -33,12 +31,14 @@ def progress_callback(progress: float, message: str):
 def main():
     # Get URL from command line argument
     if len(sys.argv) < 2:
-        sys.stdout.write(json.dumps({
+        encoder = JSONEncoder(ensure_ascii=True)
+        sys.stdout.write(encoder.encode({
             "error": "URL argument is required"
         }) + '\n')
         sys.exit(1)
     
     url = sys.argv[1]
+    encoder = JSONEncoder(ensure_ascii=True)
     
     try:
         result = convert_url_to_markdown(url, progress_callback)
@@ -48,12 +48,12 @@ def main():
         safe_title = sanitize_for_json(result.get("title", ""))
         safe_url = sanitize_for_json(url)
         
-        # Print final result as JSON
-        output = json.dumps({
+        # Use custom JSON encoder for final output
+        output = encoder.encode({
             "markdown": safe_markdown,
             "title": safe_title,
             "source_url": safe_url
-        }, ensure_ascii=True)
+        })
         sys.stdout.write(output + '\n')
         sys.stdout.flush()
         sys.exit(0)
@@ -61,15 +61,17 @@ def main():
     except Exception as e:
         # Get full traceback
         error_details = traceback.format_exc()
+        
         # Ensure error messages are JSON-safe
         safe_error = sanitize_for_json(str(e))
         safe_details = sanitize_for_json(error_details)
         
-        output = json.dumps({
+        # Use custom JSON encoder for error output
+        error_output = encoder.encode({
             "error": safe_error,
             "details": safe_details
-        }, ensure_ascii=True)
-        sys.stdout.write(output + '\n')
+        })
+        sys.stdout.write(error_output + '\n')
         sys.stdout.flush()
         sys.exit(1)
 
