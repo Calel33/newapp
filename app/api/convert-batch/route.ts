@@ -111,16 +111,21 @@ async function processHtmlContent(html: string): Promise<string> {
 async function* processUrl(url: string): AsyncGenerator<ConversionUpdate> {
   try {
     // Validate URL
-    const parsedUrl = new URL(url)
-    if (!parsedUrl.protocol.startsWith('http')) {
-      throw new Error('Invalid URL protocol. Only HTTP(S) URLs are supported.')
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+      if (!parsedUrl.protocol.startsWith('http')) {
+        throw new Error('Invalid URL protocol. Only HTTP(S) URLs are supported.');
+      }
+    } catch (urlError) {
+      throw new Error('Invalid URL format: ' + (urlError instanceof Error ? urlError.message : 'Unknown error'));
     }
 
-    yield { sourceUrl: url, status: 'fetching' }
+    yield { sourceUrl: url, status: 'fetching' };
 
     // Fetch URL content with timeout and proper headers
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 30000) // 30 second timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
 
     try {
       const response = await fetch(url, {
@@ -130,112 +135,196 @@ async function* processUrl(url: string): AsyncGenerator<ConversionUpdate> {
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
           'Accept-Language': 'en-US,en;q=0.5',
         }
-      })
+      });
 
-      clearTimeout(timeoutId)
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const contentType = response.headers.get('content-type')
-      if (!contentType || !contentType.includes('text/html')) {
-        throw new Error('URL does not return HTML content')
+      const contentType = response.headers.get('content-type')?.toLowerCase() || '';
+      if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+        throw new Error('URL does not return HTML content. Content-Type: ' + contentType);
       }
 
-      const html = await response.text()
-      yield { sourceUrl: url, status: 'converting' }
+      const html = await response.text();
+      
+      if (!html.trim()) {
+        throw new Error('Empty response received from server');
+      }
+
+      yield { sourceUrl: url, status: 'converting' };
 
       // Process content
-      const cleanedContent = await processHtmlContent(html)
+      const cleanedContent = await processHtmlContent(html);
       
       if (!cleanedContent.trim()) {
-        throw new Error('No content could be extracted from the page')
+        throw new Error('No content could be extracted from the page');
       }
+
+      // Get a meaningful title
+      const title = (() => {
+        const pathName = parsedUrl.pathname.split('/').pop() || '';
+        return pathName.replace(/[._-]/g, ' ').trim() || 'Converted Document';
+      })();
 
       yield { 
         sourceUrl: url, 
         status: 'done', 
         content: cleanedContent,
-        title: parsedUrl.pathname.split('/').pop() || 'Converted Document'
-      }
+        title
+      };
 
     } catch (error: unknown) {
-      clearTimeout(timeoutId)
+      clearTimeout(timeoutId);
       if (error instanceof Error) {
         if (error.name === 'AbortError') {
-          throw new Error('Request timed out after 30 seconds')
+          throw new Error('Request timed out after 30 seconds');
         }
-        throw error
+        throw error;
       }
-      throw new Error('Unknown fetch error occurred')
+      throw new Error('Unknown fetch error occurred');
     }
 
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Unknown error occurred'
-    yield { sourceUrl: url, status: 'error', error: message }
+    console.error(`Error processing URL ${url}:`, error);
+    const message = error instanceof Error ? error.message : 'Unknown error occurred';
+    yield { sourceUrl: url, status: 'error', error: message };
   }
 }
 
 // Handle batch conversion request
 export async function POST(request: NextRequest) {
-  const encoder = new TextEncoder()
-  const decoder = new TextDecoder()
+  const encoder = new TextEncoder();
 
   try {
-    const body = await request.json()
-    const urls: string[] = body.urls || []
+    const body = await request.json();
+    const urls: unknown = body.urls;
+
+    // Validate URLs array
+    if (!Array.isArray(urls)) {
+      return new NextResponse(
+        JSON.stringify({ error: 'Invalid request: urls must be an array' }), 
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
 
     if (!urls.length) {
-      return new NextResponse('No URLs provided', { status: 400 })
+      return new NextResponse(
+        JSON.stringify({ error: 'No URLs provided' }), 
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (!urls.every(url => typeof url === 'string')) {
+      return new NextResponse(
+        JSON.stringify({ error: 'Invalid request: all URLs must be strings' }), 
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
     }
 
     // Create a readable stream
     const stream = new ReadableStream({
       async start(controller) {
-        const writer = {
-          write(chunk: Uint8Array) {
-            controller.enqueue(chunk)
-            return Promise.resolve()
+        let isControllerClosed = false;
+
+        const safeWrite = async (chunk: Uint8Array) => {
+          if (!isControllerClosed) {
+            try {
+              controller.enqueue(chunk);
+              return true;
+            } catch (error) {
+              console.error('Error writing to stream:', error);
+              return false;
+            }
           }
-        }
+          return false;
+        };
+
+        const writeUpdate = async (data: any) => {
+          if (!isControllerClosed) {
+            const success = await safeWrite(
+              encoder.encode(
+                JSON.stringify({
+                  type: 'update',
+                  data
+                }) + '\n'
+              )
+            );
+            return success;
+          }
+          return false;
+        };
 
         try {
           // Process each URL
           for (const url of urls) {
-            for await (const result of processUrl(url)) {
-              await writer.write(
-                encoder.encode(
-                  JSON.stringify({
-                    type: 'update',
-                    data: result
-                  }) + '\n'
-                )
-              )
+            if (isControllerClosed) break;
+
+            try {
+              for await (const result of processUrl(url)) {
+                const success = await writeUpdate(result);
+                if (!success) {
+                  isControllerClosed = true;
+                  break;
+                }
+              }
+            } catch (urlError) {
+              console.error('Error processing individual URL:', urlError);
+              if (!isControllerClosed) {
+                await writeUpdate({
+                  sourceUrl: url,
+                  status: 'error',
+                  error: urlError instanceof Error ? urlError.message : 'Unknown error occurred'
+                });
+              }
             }
           }
 
-          controller.close()
+          if (!isControllerClosed) {
+            try {
+              controller.close();
+              isControllerClosed = true;
+            } catch (error) {
+              console.error('Error closing controller:', error);
+            }
+          }
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown error occurred'
-          controller.error(message)
+          console.error('Stream processing error:', error);
+          if (!isControllerClosed) {
+            try {
+              const message = error instanceof Error ? error.message : 'Unknown error occurred';
+              await writeUpdate({
+                status: 'error',
+                error: message
+              });
+              controller.close();
+              isControllerClosed = true;
+            } catch (closeError) {
+              console.error('Error during error handling:', closeError);
+            }
+          }
         }
       }
-    })
+    });
 
     return new NextResponse(stream, {
       headers: {
         'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
+        'Cache-Control': 'no-cache, no-transform',
         'Connection': 'keep-alive'
       }
-    })
+    });
 
   } catch (error) {
-    console.error('Error processing request:', error)
+    console.error('Error processing batch request:', error);
     return new NextResponse(
-      JSON.stringify({ error: 'Failed to process request' }), 
+      JSON.stringify({ 
+        error: 'Failed to process request',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }), 
       { status: 500, headers: { 'Content-Type': 'application/json' } }
-    )
+    );
   }
 }
