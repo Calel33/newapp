@@ -237,37 +237,84 @@ async function* processQueue(urls: string[]): AsyncGenerator<ConversionUpdate> {
   }
 }
 
+// Safely sanitize content for JSON
+function sanitizeContent(content: unknown): string {
+  if (content === null || content === undefined) {
+    return '';
+  }
+
+  try {
+    // Convert to string if not already
+    const str = typeof content === 'string' ? content : String(content);
+    
+    // First level of escaping for special characters
+    const escaped = str
+      .replace(/\\/g, '\\\\')     // Backslashes
+      .replace(/"/g, '\\"')       // Double quotes
+      .replace(/\n/g, '\\n')      // Newlines
+      .replace(/\r/g, '\\r')      // Carriage returns
+      .replace(/\t/g, '\\t')      // Tabs
+      .replace(/\f/g, '\\f')      // Form feeds
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, '') // Control characters
+      .replace(/\u2028/g, '\\u2028') // Line separator
+      .replace(/\u2029/g, '\\u2029'); // Paragraph separator
+
+    // Validate that the escaped string is valid JSON when quoted
+    JSON.parse(`"${escaped}"`);
+    
+    return escaped;
+  } catch (error) {
+    console.error('Error sanitizing content:', error);
+    return '[Content contains invalid characters]';
+  }
+}
+
 // Safely encode data for streaming
 function encodeStreamData(data: any): Uint8Array {
   try {
+    // Prepare safe data with sanitized content
     const safeData = {
       type: 'update',
       data: {
         ...data,
         ...(data.content && {
-          content: data.content
-            .replace(/\\/g, '\\\\')
-            .replace(/\n/g, '\\n')
-            .replace(/\r/g, '\\r')
-            .replace(/\t/g, '\\t')
-            .replace(/"/g, '\\"')
+          content: sanitizeContent(data.content)
         }),
         ...(data.error && {
-          error: data.error
-            .replace(/\\/g, '\\\\')
-            .replace(/\n/g, '\\n')
-            .replace(/\r/g, '\\r')
-            .replace(/\t/g, '\\t')
-            .replace(/"/g, '\\"')
+          error: sanitizeContent(data.error)
+        }),
+        ...(data.title && {
+          title: sanitizeContent(data.title)
         })
       }
     };
 
+    // First, stringify the entire object
     const jsonString = JSON.stringify(safeData) + '\n';
-    JSON.parse(jsonString); // Validate JSON
+
+    // Validate the entire JSON string
+    try {
+      JSON.parse(jsonString);
+    } catch (jsonError) {
+      console.error('Invalid JSON generated:', jsonError);
+      console.error('Problematic data:', safeData);
+      
+      // Fall back to a safe error message
+      const fallback = {
+        type: 'update',
+        data: {
+          status: 'error',
+          error: 'Failed to encode response data: Invalid JSON generated'
+        }
+      };
+      return new TextEncoder().encode(JSON.stringify(fallback) + '\n');
+    }
+
     return new TextEncoder().encode(jsonString);
   } catch (error) {
     console.error('Error encoding stream data:', error);
+    
+    // Fall back to a safe error message
     const fallback = {
       type: 'update',
       data: {
