@@ -226,9 +226,11 @@ async function* processQueue(urls: string[]): AsyncGenerator<ConversionUpdate> {
         };
       }
     } else if (op.type === 'complete') {
+      // Use proper type for completion message
       yield {
-        status: 'complete',
-        message: 'All URLs processed'
+        sourceUrl: 'batch',
+        status: 'success',
+        content: 'All URLs processed',
       } as ConversionUpdate;
     }
   }
