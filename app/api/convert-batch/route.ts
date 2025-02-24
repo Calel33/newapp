@@ -101,7 +101,6 @@ const MAX_TOTAL_LENGTH = 10000;  // Maximum total content length
 function splitContent(content: string): { parts: string[], totalParts: number } {
   const parts: string[] = [];
   let remaining = content;
-  let partNumber = 1;
   
   while (remaining.length > 0) {
     // Find a good split point (end of paragraph or sentence)
@@ -125,9 +124,7 @@ function splitContent(content: string): { parts: string[], totalParts: number } 
     // Extract the part
     const part = remaining.slice(0, splitPoint).trim();
     if (part) {
-      const title = `Part ${partNumber} of ${Math.ceil(content.length / MAX_CONTENT_LENGTH)}`;
       parts.push(part);
-      partNumber++;
     }
 
     // Update remaining content
@@ -137,7 +134,7 @@ function splitContent(content: string): { parts: string[], totalParts: number } 
   return { parts, totalParts: parts.length };
 }
 
-// Safely sanitize and chunk content if needed
+// Safely sanitize content
 function sanitizeContent(content: unknown, isBatch: boolean = false): string {
   if (content === null || content === undefined) {
     return '';
@@ -147,16 +144,8 @@ function sanitizeContent(content: unknown, isBatch: boolean = false): string {
     // Convert to string if not already
     const str = typeof content === 'string' ? content : String(content);
     
-    // Truncate content if too long
-    let processedContent = str;
-    if (str.length > MAX_CONTENT_LENGTH) {
-      const truncated = str.slice(0, MAX_CONTENT_LENGTH);
-      processedContent = `${truncated}... (content truncated)`;
-      console.log(`Content truncated from ${str.length} to ${processedContent.length} characters`);
-    }
-    
     // First level of escaping for special characters
-    const escaped = processedContent
+    const escaped = str
       .replace(/\\/g, '\\\\')     // Backslashes
       .replace(/"/g, '\\"')       // Double quotes
       .replace(/\n/g, '\\n')      // Newlines
@@ -168,9 +157,13 @@ function sanitizeContent(content: unknown, isBatch: boolean = false): string {
       .replace(/\u2029/g, '\\u2029'); // Paragraph separator
 
     // Validate that the escaped string is valid JSON when quoted
-    JSON.parse(`"${escaped}"`);
-    
-    return escaped;
+    try {
+      JSON.parse(`"${escaped}"`);
+      return escaped;
+    } catch (jsonError) {
+      console.error('Invalid JSON after escaping:', jsonError);
+      return isBatch ? '[Invalid content]' : 'Content contains invalid characters';
+    }
   } catch (error) {
     console.error('Error sanitizing content:', error);
     return isBatch ? '[Content processing error]' : 'Content contains invalid characters';
@@ -185,7 +178,7 @@ function encodeStreamData(data: any, isBatch: boolean = false): Uint8Array {
       type: 'update',
       data: {
         ...data,
-        isBatch, // Add batch flag to response
+        isBatch,
         ...(data.content && {
           content: sanitizeContent(data.content, isBatch)
         }),
@@ -199,7 +192,21 @@ function encodeStreamData(data: any, isBatch: boolean = false): Uint8Array {
     };
 
     // First, stringify the entire object
-    const jsonString = JSON.stringify(safeData) + '\n';
+    let jsonString: string;
+    try {
+      jsonString = JSON.stringify(safeData) + '\n';
+    } catch (stringifyError) {
+      console.error('Error stringifying data:', stringifyError);
+      const fallback = {
+        type: 'update',
+        data: {
+          status: 'error',
+          error: 'Failed to encode response data',
+          isBatch
+        }
+      };
+      return new TextEncoder().encode(JSON.stringify(fallback) + '\n');
+    }
 
     // Check total length
     if (jsonString.length > MAX_TOTAL_LENGTH) {
@@ -218,6 +225,7 @@ function encodeStreamData(data: any, isBatch: boolean = false): Uint8Array {
     // Validate the entire JSON string
     try {
       JSON.parse(jsonString);
+      return new TextEncoder().encode(jsonString);
     } catch (jsonError) {
       console.error('Invalid JSON generated:', jsonError);
       console.error('Problematic data:', safeData);
@@ -232,8 +240,6 @@ function encodeStreamData(data: any, isBatch: boolean = false): Uint8Array {
       };
       return new TextEncoder().encode(JSON.stringify(fallback) + '\n');
     }
-
-    return new TextEncoder().encode(jsonString);
   } catch (error) {
     console.error('Error encoding stream data:', error);
     
