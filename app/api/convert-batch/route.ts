@@ -194,10 +194,90 @@ async function* processUrl(url: string): AsyncGenerator<ConversionUpdate> {
   }
 }
 
+// Types for queue operations
+type QueueOperation = {
+  type: 'url' | 'complete';
+  url?: string;
+};
+
+// Process queue of operations
+async function* processQueue(urls: string[]): AsyncGenerator<ConversionUpdate> {
+  // Create queue of operations
+  const queue: QueueOperation[] = [
+    ...urls.map(url => ({ type: 'url' as const, url })),
+    { type: 'complete' as const }
+  ];
+
+  // Process each operation in sequence
+  for (const op of queue) {
+    if (op.type === 'url' && op.url) {
+      try {
+        // Process single URL
+        const generator = processUrl(op.url);
+        for await (const result of generator) {
+          yield result;
+        }
+      } catch (error) {
+        console.error('Error processing URL:', op.url, error);
+        yield {
+          sourceUrl: op.url,
+          status: 'error',
+          error: error instanceof Error ? error.message : 'Unknown error occurred'
+        };
+      }
+    } else if (op.type === 'complete') {
+      yield {
+        status: 'complete',
+        message: 'All URLs processed'
+      } as ConversionUpdate;
+    }
+  }
+}
+
+// Safely encode data for streaming
+function encodeStreamData(data: any): Uint8Array {
+  try {
+    const safeData = {
+      type: 'update',
+      data: {
+        ...data,
+        ...(data.content && {
+          content: data.content
+            .replace(/\\/g, '\\\\')
+            .replace(/\n/g, '\\n')
+            .replace(/\r/g, '\\r')
+            .replace(/\t/g, '\\t')
+            .replace(/"/g, '\\"')
+        }),
+        ...(data.error && {
+          error: data.error
+            .replace(/\\/g, '\\\\')
+            .replace(/\n/g, '\\n')
+            .replace(/\r/g, '\\r')
+            .replace(/\t/g, '\\t')
+            .replace(/"/g, '\\"')
+        })
+      }
+    };
+
+    const jsonString = JSON.stringify(safeData) + '\n';
+    JSON.parse(jsonString); // Validate JSON
+    return new TextEncoder().encode(jsonString);
+  } catch (error) {
+    console.error('Error encoding stream data:', error);
+    const fallback = {
+      type: 'update',
+      data: {
+        status: 'error',
+        error: 'Failed to encode response data'
+      }
+    };
+    return new TextEncoder().encode(JSON.stringify(fallback) + '\n');
+  }
+}
+
 // Handle batch conversion request
 export async function POST(request: NextRequest) {
-  const encoder = new TextEncoder();
-
   try {
     const body = await request.json();
     const urls: unknown = body.urls;
@@ -224,129 +304,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create a readable stream with proper state management
+    // Create stream from queue processor
     const stream = new ReadableStream({
       async start(controller) {
-        const streamState = {
-          isClosed: false,
-          error: null as Error | null,
-          pendingWrites: 0,
-        };
-
-        // Safe write function that handles state
-        const safeWrite = async (data: any): Promise<boolean> => {
-          if (streamState.isClosed) {
-            return false;
-          }
-
-          try {
-            // Prepare safe data with proper escaping
-            const safeData = {
-              type: 'update',
-              data: {
-                ...data,
-                ...(data.content && {
-                  content: data.content
-                    .replace(/\\/g, '\\\\')
-                    .replace(/\n/g, '\\n')
-                    .replace(/\r/g, '\\r')
-                    .replace(/\t/g, '\\t')
-                    .replace(/"/g, '\\"')
-                }),
-                ...(data.error && {
-                  error: data.error
-                    .replace(/\\/g, '\\\\')
-                    .replace(/\n/g, '\\n')
-                    .replace(/\r/g, '\\r')
-                    .replace(/\t/g, '\\t')
-                    .replace(/"/g, '\\"')
-                })
-              }
-            };
-
-            // Validate JSON before sending
-            const jsonString = JSON.stringify(safeData) + '\n';
-            
-            try {
-              JSON.parse(jsonString); // Verify JSON is valid
-            } catch (jsonError) {
-              console.error('Invalid JSON generated:', jsonError);
-              return false;
-            }
-
-            streamState.pendingWrites++;
-            
-            try {
-              controller.enqueue(encoder.encode(jsonString));
-              return true;
-            } catch (enqueueError) {
-              console.error('Error enqueueing data:', enqueueError);
-              return false;
-            } finally {
-              streamState.pendingWrites--;
-            }
-          } catch (error) {
-            console.error('Error in safeWrite:', error);
-            return false;
-          }
-        };
-
-        // Process URLs sequentially
         try {
-          for (const url of urls) {
-            if (streamState.isClosed) break;
-
+          // Process queue sequentially
+          const generator = processQueue(urls);
+          for await (const result of generator) {
             try {
-              const generator = processUrl(url);
-              
-              for await (const result of generator) {
-                if (streamState.isClosed) break;
-                
-                const writeSuccess = await safeWrite(result);
-                
-                if (!writeSuccess) {
-                  console.error('Failed to write update for URL:', url);
-                  break;
-                }
-              }
-            } catch (urlError) {
-              console.error('Error processing URL:', url, urlError);
-              
-              if (!streamState.isClosed) {
-                await safeWrite({
-                  sourceUrl: url,
-                  status: 'error',
-                  error: urlError instanceof Error ? urlError.message : 'Unknown error occurred'
-                });
-              }
+              controller.enqueue(encodeStreamData(result));
+            } catch (error) {
+              console.error('Error writing to stream:', error);
+              break;
             }
-          }
-
-          // Wait for any pending writes to complete
-          while (streamState.pendingWrites > 0) {
-            await new Promise(resolve => setTimeout(resolve, 50));
-          }
-
-          // Send completion message if not closed
-          if (!streamState.isClosed) {
-            await safeWrite({
-              status: 'complete',
-              message: 'All URLs processed'
-            });
           }
         } catch (error) {
           console.error('Stream processing error:', error);
-          streamState.error = error instanceof Error ? error : new Error('Unknown error');
         } finally {
-          // Ensure we only close once
-          if (!streamState.isClosed) {
-            streamState.isClosed = true;
-            try {
-              controller.close();
-            } catch (closeError) {
-              console.error('Error closing controller:', closeError);
-            }
-          }
+          controller.close();
         }
       }
     });
