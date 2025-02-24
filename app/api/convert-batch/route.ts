@@ -224,98 +224,96 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create a readable stream
+    // Create a readable stream with proper state management
     const stream = new ReadableStream({
       async start(controller) {
-        let isControllerClosed = false;
-
-        const safeWrite = async (chunk: Uint8Array) => {
-          if (!isControllerClosed) {
-            try {
-              controller.enqueue(chunk);
-              return true;
-            } catch (error) {
-              console.error('Error writing to stream:', error);
-              return false;
-            }
-          }
-          return false;
+        const streamState = {
+          isClosed: false,
+          error: null as Error | null,
+          pendingWrites: 0,
         };
 
-        const writeUpdate = async (data: any) => {
-          if (!isControllerClosed) {
-            try {
-              // Safely prepare the JSON data
-              const safeData = {
-                type: 'update',
-                data: {
-                  ...data,
-                  // Ensure content is properly escaped if it exists
-                  ...(data.content && {
-                    content: data.content
-                      .replace(/\\/g, '\\\\')  // Escape backslashes
-                      .replace(/\n/g, '\\n')   // Escape newlines
-                      .replace(/\r/g, '\\r')   // Escape carriage returns
-                      .replace(/\t/g, '\\t')   // Escape tabs
-                      .replace(/"/g, '\\"')    // Escape quotes
-                  }),
-                  // Ensure error message is properly escaped if it exists
-                  ...(data.error && {
-                    error: data.error
-                      .replace(/\\/g, '\\\\')
-                      .replace(/\n/g, '\\n')
-                      .replace(/\r/g, '\\r')
-                      .replace(/\t/g, '\\t')
-                      .replace(/"/g, '\\"')
-                  })
-                }
-              };
+        // Safe write function that handles state
+        const safeWrite = async (data: any): Promise<boolean> => {
+          if (streamState.isClosed) {
+            return false;
+          }
 
-              // Validate JSON before sending
-              const jsonString = JSON.stringify(safeData) + '\n';
-              try {
-                // Verify the JSON is valid
-                JSON.parse(jsonString);
-              } catch (jsonError) {
-                console.error('Invalid JSON generated:', jsonError);
-                // Fall back to a safe error message
-                const fallbackData = {
-                  type: 'update',
-                  data: {
-                    sourceUrl: data.sourceUrl || 'unknown',
-                    status: 'error',
-                    error: 'Failed to process content: Invalid characters in response'
-                  }
-                };
-                return await safeWrite(encoder.encode(JSON.stringify(fallbackData) + '\n'));
+          try {
+            // Prepare safe data with proper escaping
+            const safeData = {
+              type: 'update',
+              data: {
+                ...data,
+                ...(data.content && {
+                  content: data.content
+                    .replace(/\\/g, '\\\\')
+                    .replace(/\n/g, '\\n')
+                    .replace(/\r/g, '\\r')
+                    .replace(/\t/g, '\\t')
+                    .replace(/"/g, '\\"')
+                }),
+                ...(data.error && {
+                  error: data.error
+                    .replace(/\\/g, '\\\\')
+                    .replace(/\n/g, '\\n')
+                    .replace(/\r/g, '\\r')
+                    .replace(/\t/g, '\\t')
+                    .replace(/"/g, '\\"')
+                })
               }
+            };
 
-              return await safeWrite(encoder.encode(jsonString));
-            } catch (error) {
-              console.error('Error preparing data for stream:', error);
+            // Validate JSON before sending
+            const jsonString = JSON.stringify(safeData) + '\n';
+            
+            try {
+              JSON.parse(jsonString); // Verify JSON is valid
+            } catch (jsonError) {
+              console.error('Invalid JSON generated:', jsonError);
               return false;
             }
+
+            streamState.pendingWrites++;
+            
+            try {
+              controller.enqueue(encoder.encode(jsonString));
+              return true;
+            } catch (enqueueError) {
+              console.error('Error enqueueing data:', enqueueError);
+              return false;
+            } finally {
+              streamState.pendingWrites--;
+            }
+          } catch (error) {
+            console.error('Error in safeWrite:', error);
+            return false;
           }
-          return false;
         };
 
+        // Process URLs sequentially
         try {
-          // Process each URL
           for (const url of urls) {
-            if (isControllerClosed) break;
+            if (streamState.isClosed) break;
 
             try {
-              for await (const result of processUrl(url)) {
-                const success = await writeUpdate(result);
-                if (!success) {
-                  isControllerClosed = true;
+              const generator = processUrl(url);
+              
+              for await (const result of generator) {
+                if (streamState.isClosed) break;
+                
+                const writeSuccess = await safeWrite(result);
+                
+                if (!writeSuccess) {
+                  console.error('Failed to write update for URL:', url);
                   break;
                 }
               }
             } catch (urlError) {
-              console.error('Error processing individual URL:', urlError);
-              if (!isControllerClosed) {
-                await writeUpdate({
+              console.error('Error processing URL:', url, urlError);
+              
+              if (!streamState.isClosed) {
+                await safeWrite({
                   sourceUrl: url,
                   status: 'error',
                   error: urlError instanceof Error ? urlError.message : 'Unknown error occurred'
@@ -324,32 +322,29 @@ export async function POST(request: NextRequest) {
             }
           }
 
-          if (!isControllerClosed) {
-            try {
-              // Send completion message
-              await writeUpdate({
-                status: 'complete',
-                message: 'All URLs processed'
-              });
-              controller.close();
-              isControllerClosed = true;
-            } catch (error) {
-              console.error('Error closing controller:', error);
-            }
+          // Wait for any pending writes to complete
+          while (streamState.pendingWrites > 0) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
+
+          // Send completion message if not closed
+          if (!streamState.isClosed) {
+            await safeWrite({
+              status: 'complete',
+              message: 'All URLs processed'
+            });
           }
         } catch (error) {
           console.error('Stream processing error:', error);
-          if (!isControllerClosed) {
+          streamState.error = error instanceof Error ? error : new Error('Unknown error');
+        } finally {
+          // Ensure we only close once
+          if (!streamState.isClosed) {
+            streamState.isClosed = true;
             try {
-              const message = error instanceof Error ? error.message : 'Unknown error occurred';
-              await writeUpdate({
-                status: 'error',
-                error: message
-              });
               controller.close();
-              isControllerClosed = true;
             } catch (closeError) {
-              console.error('Error during error handling:', closeError);
+              console.error('Error closing controller:', closeError);
             }
           }
         }
