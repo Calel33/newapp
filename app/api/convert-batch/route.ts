@@ -97,6 +97,46 @@ type ConversionUpdate = ConversionProgress | ConversionResult | ConversionError 
 const MAX_CONTENT_LENGTH = 3000; // Maximum length for content chunks
 const MAX_TOTAL_LENGTH = 10000;  // Maximum total content length
 
+// Split content into multiple parts
+function splitContent(content: string): { parts: string[], totalParts: number } {
+  const parts: string[] = [];
+  let remaining = content;
+  let partNumber = 1;
+  
+  while (remaining.length > 0) {
+    // Find a good split point (end of paragraph or sentence)
+    let splitPoint = MAX_CONTENT_LENGTH;
+    if (remaining.length > MAX_CONTENT_LENGTH) {
+      // Try to find paragraph break
+      const paragraphBreak = remaining.lastIndexOf('\n\n', MAX_CONTENT_LENGTH);
+      if (paragraphBreak > MAX_CONTENT_LENGTH / 2) {
+        splitPoint = paragraphBreak;
+      } else {
+        // Try to find sentence break
+        const sentenceBreak = remaining.lastIndexOf('. ', MAX_CONTENT_LENGTH);
+        if (sentenceBreak > MAX_CONTENT_LENGTH / 2) {
+          splitPoint = sentenceBreak + 1; // Include the period
+        }
+      }
+    } else {
+      splitPoint = remaining.length;
+    }
+
+    // Extract the part
+    const part = remaining.slice(0, splitPoint).trim();
+    if (part) {
+      const title = `Part ${partNumber} of ${Math.ceil(content.length / MAX_CONTENT_LENGTH)}`;
+      parts.push(part);
+      partNumber++;
+    }
+
+    // Update remaining content
+    remaining = remaining.slice(splitPoint).trim();
+  }
+
+  return { parts, totalParts: parts.length };
+}
+
 // Safely sanitize and chunk content if needed
 function sanitizeContent(content: unknown, isBatch: boolean = false): string {
   if (content === null || content === undefined) {
@@ -296,12 +336,28 @@ async function* processUrl(url: string): AsyncGenerator<ConversionUpdate> {
         return pathName.replace(/[._-]/g, ' ').trim() || 'Converted Document';
       })();
 
-      yield { 
-        sourceUrl: url, 
-        status: 'done', 
-        content: cleanedContent,
-        title
-      };
+      // Check if content needs to be split
+      if (cleanedContent.length > MAX_CONTENT_LENGTH) {
+        const { parts, totalParts } = splitContent(cleanedContent);
+        
+        // Yield each part as a separate result
+        for (let i = 0; i < parts.length; i++) {
+          yield {
+            sourceUrl: url,
+            status: 'done',
+            title: `${title} (Part ${i + 1} of ${totalParts})`,
+            content: parts[i]
+          };
+        }
+      } else {
+        // Yield single result
+        yield {
+          sourceUrl: url,
+          status: 'done',
+          title,
+          content: cleanedContent
+        };
+      }
 
     } catch (error: unknown) {
       clearTimeout(timeoutId);
