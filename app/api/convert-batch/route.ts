@@ -58,12 +58,12 @@ turndownService.addRule('list', {
 })
 
 // Types
-type ConversionStatus = 'fetching' | 'converting' | 'done' | 'error';
+type ConversionStatus = 'fetching' | 'converting' | 'done' | 'error' | 'notification';
 
 // Base interface for progress updates
 interface BaseProgress {
   sourceUrl: string;
-  isBatch?: boolean; // Add isBatch flag
+  isBatch?: boolean;
 }
 
 // Progress update during fetching and conversion
@@ -84,7 +84,14 @@ interface ConversionError extends BaseProgress {
   error: string;
 }
 
-type ConversionUpdate = ConversionProgress | ConversionResult | ConversionError;
+// Notification message (for batch completion)
+interface ConversionNotification extends BaseProgress {
+  status: 'notification';
+  message: string;
+}
+
+// Union type for all possible updates
+type ConversionUpdate = ConversionProgress | ConversionResult | ConversionError | ConversionNotification;
 
 // Constants for content management
 const MAX_CONTENT_LENGTH = 3000; // Maximum length for content chunks
@@ -339,7 +346,7 @@ async function* processQueue(urls: string[]): AsyncGenerator<ConversionUpdate> {
         for await (const result of generator) {
           yield {
             ...result,
-            isBatch // Add batch flag to each result
+            isBatch
           } as ConversionUpdate;
         }
       } catch (error) {
@@ -349,17 +356,16 @@ async function* processQueue(urls: string[]): AsyncGenerator<ConversionUpdate> {
           status: 'error',
           error: error instanceof Error ? error.message : 'Unknown error occurred',
           isBatch
-        };
+        } as ConversionError;
       }
-    } else if (op.type === 'complete') {
-      // Use proper type for completion message
+    } else if (op.type === 'complete' && isBatch) {
+      // For batch processing, send a notification instead of a conversion card
       yield {
         sourceUrl: 'batch',
-        status: 'done',
-        title: 'Batch Processing Complete',
-        content: `Successfully processed ${urls.length} URLs`,
-        isBatch
-      } as ConversionUpdate;
+        status: 'notification',
+        message: `Successfully processed ${urls.length} URLs`,
+        isBatch: true
+      } as ConversionNotification;
     }
   }
 }
