@@ -82,6 +82,122 @@ interface ConversionError extends BaseProgress {
 
 type ConversionUpdate = ConversionProgress | ConversionResult | ConversionError;
 
+// Constants for content management
+const MAX_CONTENT_LENGTH = 3000; // Maximum length for content chunks
+const MAX_TOTAL_LENGTH = 10000;  // Maximum total content length
+
+// Safely sanitize and chunk content if needed
+function sanitizeContent(content: unknown, isBatch: boolean = false): string {
+  if (content === null || content === undefined) {
+    return '';
+  }
+
+  try {
+    // Convert to string if not already
+    const str = typeof content === 'string' ? content : String(content);
+    
+    // Truncate content if too long
+    let processedContent = str;
+    if (str.length > MAX_CONTENT_LENGTH) {
+      const truncated = str.slice(0, MAX_CONTENT_LENGTH);
+      processedContent = `${truncated}... (content truncated)`;
+      console.log(`Content truncated from ${str.length} to ${processedContent.length} characters`);
+    }
+    
+    // First level of escaping for special characters
+    const escaped = processedContent
+      .replace(/\\/g, '\\\\')     // Backslashes
+      .replace(/"/g, '\\"')       // Double quotes
+      .replace(/\n/g, '\\n')      // Newlines
+      .replace(/\r/g, '\\r')      // Carriage returns
+      .replace(/\t/g, '\\t')      // Tabs
+      .replace(/\f/g, '\\f')      // Form feeds
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, '') // Control characters
+      .replace(/\u2028/g, '\\u2028') // Line separator
+      .replace(/\u2029/g, '\\u2029'); // Paragraph separator
+
+    // Validate that the escaped string is valid JSON when quoted
+    JSON.parse(`"${escaped}"`);
+    
+    return escaped;
+  } catch (error) {
+    console.error('Error sanitizing content:', error);
+    return isBatch ? '[Content processing error]' : 'Content contains invalid characters';
+  }
+}
+
+// Safely encode data for streaming
+function encodeStreamData(data: any, isBatch: boolean = false): Uint8Array {
+  try {
+    // Prepare safe data with sanitized content
+    const safeData = {
+      type: 'update',
+      data: {
+        ...data,
+        isBatch, // Add batch flag to response
+        ...(data.content && {
+          content: sanitizeContent(data.content, isBatch)
+        }),
+        ...(data.error && {
+          error: sanitizeContent(data.error, isBatch)
+        }),
+        ...(data.title && {
+          title: sanitizeContent(data.title, isBatch)
+        })
+      }
+    };
+
+    // First, stringify the entire object
+    const jsonString = JSON.stringify(safeData) + '\n';
+
+    // Check total length
+    if (jsonString.length > MAX_TOTAL_LENGTH) {
+      console.warn(`JSON string too long: ${jsonString.length} characters`);
+      const fallback = {
+        type: 'update',
+        data: {
+          status: 'error',
+          error: 'Response too large to process',
+          isBatch
+        }
+      };
+      return new TextEncoder().encode(JSON.stringify(fallback) + '\n');
+    }
+
+    // Validate the entire JSON string
+    try {
+      JSON.parse(jsonString);
+    } catch (jsonError) {
+      console.error('Invalid JSON generated:', jsonError);
+      console.error('Problematic data:', safeData);
+      
+      const fallback = {
+        type: 'update',
+        data: {
+          status: 'error',
+          error: 'Failed to encode response data: Invalid JSON generated',
+          isBatch
+        }
+      };
+      return new TextEncoder().encode(JSON.stringify(fallback) + '\n');
+    }
+
+    return new TextEncoder().encode(jsonString);
+  } catch (error) {
+    console.error('Error encoding stream data:', error);
+    
+    const fallback = {
+      type: 'update',
+      data: {
+        status: 'error',
+        error: 'Failed to encode response data',
+        isBatch
+      }
+    };
+    return new TextEncoder().encode(JSON.stringify(fallback) + '\n');
+  }
+}
+
 // Process HTML content and convert to markdown
 async function processHtmlContent(html: string): Promise<string> {
   try {
@@ -202,6 +318,8 @@ type QueueOperation = {
 
 // Process queue of operations
 async function* processQueue(urls: string[]): AsyncGenerator<ConversionUpdate> {
+  const isBatch = urls.length > 1;
+  
   // Create queue of operations
   const queue: QueueOperation[] = [
     ...urls.map(url => ({ type: 'url' as const, url })),
@@ -215,114 +333,30 @@ async function* processQueue(urls: string[]): AsyncGenerator<ConversionUpdate> {
         // Process single URL
         const generator = processUrl(op.url);
         for await (const result of generator) {
-          yield result;
+          yield {
+            ...result,
+            isBatch // Add batch flag to each result
+          } as ConversionUpdate;
         }
       } catch (error) {
         console.error('Error processing URL:', op.url, error);
         yield {
           sourceUrl: op.url,
           status: 'error',
-          error: error instanceof Error ? error.message : 'Unknown error occurred'
+          error: error instanceof Error ? error.message : 'Unknown error occurred',
+          isBatch
         };
       }
     } else if (op.type === 'complete') {
-      // Use proper type for completion message with correct status
+      // Use proper type for completion message
       yield {
         sourceUrl: 'batch',
         status: 'done',
-        title: 'Batch Conversion Complete',
-        content: 'All URLs processed',
+        title: 'Batch Processing Complete',
+        content: `Successfully processed ${urls.length} URLs`,
+        isBatch
       } as ConversionUpdate;
     }
-  }
-}
-
-// Safely sanitize content for JSON
-function sanitizeContent(content: unknown): string {
-  if (content === null || content === undefined) {
-    return '';
-  }
-
-  try {
-    // Convert to string if not already
-    const str = typeof content === 'string' ? content : String(content);
-    
-    // First level of escaping for special characters
-    const escaped = str
-      .replace(/\\/g, '\\\\')     // Backslashes
-      .replace(/"/g, '\\"')       // Double quotes
-      .replace(/\n/g, '\\n')      // Newlines
-      .replace(/\r/g, '\\r')      // Carriage returns
-      .replace(/\t/g, '\\t')      // Tabs
-      .replace(/\f/g, '\\f')      // Form feeds
-      .replace(/[\u0000-\u001F\u007F-\u009F]/g, '') // Control characters
-      .replace(/\u2028/g, '\\u2028') // Line separator
-      .replace(/\u2029/g, '\\u2029'); // Paragraph separator
-
-    // Validate that the escaped string is valid JSON when quoted
-    JSON.parse(`"${escaped}"`);
-    
-    return escaped;
-  } catch (error) {
-    console.error('Error sanitizing content:', error);
-    return '[Content contains invalid characters]';
-  }
-}
-
-// Safely encode data for streaming
-function encodeStreamData(data: any): Uint8Array {
-  try {
-    // Prepare safe data with sanitized content
-    const safeData = {
-      type: 'update',
-      data: {
-        ...data,
-        ...(data.content && {
-          content: sanitizeContent(data.content)
-        }),
-        ...(data.error && {
-          error: sanitizeContent(data.error)
-        }),
-        ...(data.title && {
-          title: sanitizeContent(data.title)
-        })
-      }
-    };
-
-    // First, stringify the entire object
-    const jsonString = JSON.stringify(safeData) + '\n';
-
-    // Validate the entire JSON string
-    try {
-      JSON.parse(jsonString);
-    } catch (jsonError) {
-      console.error('Invalid JSON generated:', jsonError);
-      console.error('Problematic data:', safeData);
-      
-      // Fall back to a safe error message
-      const fallback = {
-        type: 'update',
-        data: {
-          status: 'error',
-          error: 'Failed to encode response data: Invalid JSON generated'
-        }
-      };
-      return new TextEncoder().encode(JSON.stringify(fallback) + '\n');
-    }
-
-    return new TextEncoder().encode(jsonString);
-  } catch (error) {
-    console.error('Error encoding stream data:', error);
-    
-    // Fall back to a safe error message
-    const fallback = {
-      type: 'update',
-      data: {
-        status: 'error',
-        error: 'Failed to encode response data'
-      }
-    };
-    return new TextEncoder().encode(JSON.stringify(fallback) + '\n');
   }
 }
 
