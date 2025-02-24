@@ -244,15 +244,57 @@ export async function POST(request: NextRequest) {
 
         const writeUpdate = async (data: any) => {
           if (!isControllerClosed) {
-            const success = await safeWrite(
-              encoder.encode(
-                JSON.stringify({
+            try {
+              // Safely prepare the JSON data
+              const safeData = {
+                type: 'update',
+                data: {
+                  ...data,
+                  // Ensure content is properly escaped if it exists
+                  ...(data.content && {
+                    content: data.content
+                      .replace(/\\/g, '\\\\')  // Escape backslashes
+                      .replace(/\n/g, '\\n')   // Escape newlines
+                      .replace(/\r/g, '\\r')   // Escape carriage returns
+                      .replace(/\t/g, '\\t')   // Escape tabs
+                      .replace(/"/g, '\\"')    // Escape quotes
+                  }),
+                  // Ensure error message is properly escaped if it exists
+                  ...(data.error && {
+                    error: data.error
+                      .replace(/\\/g, '\\\\')
+                      .replace(/\n/g, '\\n')
+                      .replace(/\r/g, '\\r')
+                      .replace(/\t/g, '\\t')
+                      .replace(/"/g, '\\"')
+                  })
+                }
+              };
+
+              // Validate JSON before sending
+              const jsonString = JSON.stringify(safeData) + '\n';
+              try {
+                // Verify the JSON is valid
+                JSON.parse(jsonString);
+              } catch (jsonError) {
+                console.error('Invalid JSON generated:', jsonError);
+                // Fall back to a safe error message
+                const fallbackData = {
                   type: 'update',
-                  data
-                }) + '\n'
-              )
-            );
-            return success;
+                  data: {
+                    sourceUrl: data.sourceUrl || 'unknown',
+                    status: 'error',
+                    error: 'Failed to process content: Invalid characters in response'
+                  }
+                };
+                return await safeWrite(encoder.encode(JSON.stringify(fallbackData) + '\n'));
+              }
+
+              return await safeWrite(encoder.encode(jsonString));
+            } catch (error) {
+              console.error('Error preparing data for stream:', error);
+              return false;
+            }
           }
           return false;
         };
@@ -284,6 +326,11 @@ export async function POST(request: NextRequest) {
 
           if (!isControllerClosed) {
             try {
+              // Send completion message
+              await writeUpdate({
+                status: 'complete',
+                message: 'All URLs processed'
+              });
               controller.close();
               isControllerClosed = true;
             } catch (error) {
