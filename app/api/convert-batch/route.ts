@@ -60,21 +60,25 @@ turndownService.addRule('list', {
 // Types
 type ConversionStatus = 'fetching' | 'converting' | 'done' | 'error';
 
+// Base interface for progress updates
 interface BaseProgress {
-  status: ConversionStatus;
   sourceUrl: string;
+  isBatch?: boolean; // Add isBatch flag
 }
 
+// Progress update during fetching and conversion
 interface ConversionProgress extends BaseProgress {
   status: 'fetching' | 'converting';
 }
 
+// Final result with content
 interface ConversionResult extends BaseProgress {
   status: 'done';
   content: string;
   title: string;
 }
 
+// Error during conversion
 interface ConversionError extends BaseProgress {
   status: 'error';
   error: string;
