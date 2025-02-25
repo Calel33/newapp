@@ -159,13 +159,17 @@ const markdownComponents: Components = {
   ),
   
   img: ({ src, alt, ...props }: MarkdownComponentProps & { src?: string; alt?: string }) => (
-    <img
-      src={src || ''}
-      alt={alt || ''}
-      className="max-w-full h-auto rounded-lg my-4"
-      loading="lazy"
-      {...props}
-    />
+    <div className="my-4">
+      <a
+        href={src || '#'}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-blue-600 hover:underline break-all"
+      >
+        {src}
+      </a>
+      {alt && <div className="text-sm text-gray-500 mt-1">{alt}</div>}
+    </div>
   ),
 };
 

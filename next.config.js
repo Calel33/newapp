@@ -6,6 +6,14 @@ const nextConfig = {
     },
   },
   reactStrictMode: true,
+  api: {
+    bodyParser: {
+      sizeLimit: '10mb'
+    }
+  },
+  images: {
+    domains: ['html2me.netlify.app'],
+  },
 }
 
 module.exports = nextConfig
