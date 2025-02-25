@@ -59,35 +59,45 @@ export function DocsConverter() {
         throw new Error('Failed to get response reader');
       }
 
+      let buffer = '';
+      
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
         const chunk = new TextDecoder().decode(value);
-        const lines = chunk.split('\n').filter(Boolean);
+        buffer += chunk;
 
-        for (const line of lines) {
-          try {
-            const data = JSON.parse(line);
-            
-            if (data.type === 'update') {
-              const update = data.data;
+        // Process complete JSON objects
+        let boundary;
+        while ((boundary = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 1);
+
+          if (line.trim()) {
+            try {
+              const data = JSON.parse(line);
               
-              if (update.status === 'progress') {
-                setConversionProgress(update.progress);
-              } else if (update.status === 'done') {
-                setConvertedContent({
-                  title: update.title || 'Converted Document',
-                  markdown: update.content,
-                  sourceUrl: update.sourceUrl,
-                });
-                setConversionProgress(100);
-              } else if (update.status === 'error') {
-                setError(update.error);
+              if (data.type === 'update') {
+                const update = data.data;
+                
+                if (update.status === 'progress') {
+                  setConversionProgress(update.progress);
+                } else if (update.status === 'done') {
+                  setConvertedContent({
+                    title: update.title || 'Converted Document',
+                    markdown: update.content,
+                    sourceUrl: update.sourceUrl,
+                  });
+                  setConversionProgress(100);
+                } else if (update.status === 'error') {
+                  setError(update.error);
+                }
               }
+            } catch (parseError) {
+              console.error('Error parsing JSON:', parseError);
+              setError({ message: 'Failed to parse server response' });
             }
-          } catch (parseError) {
-            console.error('Error parsing JSON:', parseError);
           }
         }
       }
