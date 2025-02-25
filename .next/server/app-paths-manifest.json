@@ -1,4 +1,4 @@
 {
-  "/api/convert-batch/route": "app/api/convert-batch/route.js",
+  "/api/convert/route": "app/api/convert/route.js",
   "/page": "app/page.js"
 }

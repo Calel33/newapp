@@ -16,9 +16,9 @@ interface ConvertedContent {
 }
 
 export function DocsConverter() {
-  const [urls, setUrls] = React.useState<string[]>([''])
+  const [url, setUrl] = React.useState('')
   const [isConverting, setIsConverting] = React.useState(false)
-  const [convertedContent, setConvertedContent] = React.useState<ConvertedContent[]>([])
+  const [convertedContent, setConvertedContent] = React.useState<ConvertedContent | null>(null)
   const [error, setError] = React.useState<{ message: string } | null>(null)
   const [conversionProgress, setConversionProgress] = React.useState(0)
   const { toast } = useToast()
@@ -26,11 +26,11 @@ export function DocsConverter() {
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     
-    // Don't submit if no URLs or only empty URLs
-    if (!urls.some(url => url.trim())) {
+    // Don't submit if URL is empty
+    if (!url.trim()) {
       toast({
-        title: "No URLs to convert",
-        description: "Please enter at least one valid URL.",
+        title: "No URL provided",
+        description: "Please enter a valid URL to convert.",
         variant: "destructive",
       });
       return;
@@ -38,16 +38,16 @@ export function DocsConverter() {
     
     setIsConverting(true);
     setError(null);
-    setConvertedContent([]);
+    setConvertedContent(null);
     setConversionProgress(0);
 
     try {
-      const response = await fetch('/api/convert-batch', {
+      const response = await fetch('/api/convert', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ urls }),
+        body: JSON.stringify({ url }),
       });
 
       if (!response.ok) {
@@ -75,11 +75,11 @@ export function DocsConverter() {
             if (update.status === 'progress') {
               setConversionProgress(update.progress);
             } else if (update.status === 'done') {
-              setConvertedContent(prev => [...prev, {
+              setConvertedContent({
                 title: update.title || 'Converted Document',
                 markdown: update.content,
                 sourceUrl: update.sourceUrl,
-              }]);
+              });
               setConversionProgress(100);
             } else if (update.status === 'error') {
               setError(update.error);
@@ -98,14 +98,23 @@ export function DocsConverter() {
   const getConversionStatus = () => {
     if (error) return 'error';
     if (isConverting) return 'converting';
-    if (convertedContent.length > 0) return 'success';
+    if (convertedContent) return 'success';
     return 'idle';
   }
 
   return (
     <div className="space-y-8">
       <form onSubmit={handleSubmit} className="space-y-4">
-        <UrlInputList urls={urls} onChange={setUrls} />
+        <div className="space-y-2">
+          <input
+            type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="Enter documentation URL"
+            className="w-full px-4 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            required
+          />
+        </div>
         
         <Button
           type="submit"
@@ -125,17 +134,14 @@ export function DocsConverter() {
         message={error?.message}
       />
 
-      {convertedContent.length > 0 && (
+      {convertedContent && (
         <div className="space-y-4">
-          {convertedContent.map((result, index) => (
-            <ConvertedContentCard
-              key={index}
-              title={result.title}
-              markdown={result.markdown}
-              sourceUrl={result.sourceUrl}
-              defaultOpen={false}
-            />
-          ))}
+          <ConvertedContentCard
+            title={convertedContent.title}
+            markdown={convertedContent.markdown}
+            sourceUrl={convertedContent.sourceUrl}
+            defaultOpen={true}
+          />
         </div>
       )}
     </div>

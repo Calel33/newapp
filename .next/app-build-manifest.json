@@ -11,10 +11,10 @@
       "static/chunks/main-app.js",
       "static/chunks/app/page.js"
     ],
-    "/api/convert-batch/route": [
+    "/api/convert/route": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/api/convert-batch/route.js"
+      "static/chunks/app/api/convert/route.js"
     ]
   }
 }
