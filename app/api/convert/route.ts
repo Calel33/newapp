@@ -45,6 +45,8 @@ export async function POST(request: NextRequest) {
     // Create stream for real-time updates
     const stream = new ReadableStream({
       async start(controller) {
+        let buffer = ''
+        
         try {
           // Fetch URL content
           controller.enqueue(encoder.encode(JSON.stringify({
@@ -91,7 +93,7 @@ export async function POST(request: NextRequest) {
           const title = document.title || url.split('/').pop()?.replace(/[._-]/g, ' ') || 'Converted Document'
 
           // Send final result
-          controller.enqueue(encoder.encode(JSON.stringify({
+          const finalResponse = JSON.stringify({
             type: 'update',
             data: {
               status: 'done',
@@ -99,16 +101,20 @@ export async function POST(request: NextRequest) {
               content: cleanedMarkdown,
               sourceUrl: url
             }
-          }) + '\n'))
+          })
+          
+          // Ensure complete JSON is sent
+          controller.enqueue(encoder.encode(finalResponse + '\n'))
 
         } catch (error) {
-          controller.enqueue(encoder.encode(JSON.stringify({
+          const errorResponse = JSON.stringify({
             type: 'update',
             data: {
               status: 'error',
               error: error instanceof Error ? error.message : 'Conversion failed'
             }
-          }) + '\n'))
+          })
+          controller.enqueue(encoder.encode(errorResponse + '\n'))
         } finally {
           controller.close()
         }
