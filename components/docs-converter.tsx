@@ -67,23 +67,27 @@ export function DocsConverter() {
         const lines = chunk.split('\n').filter(Boolean);
 
         for (const line of lines) {
-          const data = JSON.parse(line);
-          
-          if (data.type === 'update') {
-            const update = data.data;
+          try {
+            const data = JSON.parse(line);
             
-            if (update.status === 'progress') {
-              setConversionProgress(update.progress);
-            } else if (update.status === 'done') {
-              setConvertedContent({
-                title: update.title || 'Converted Document',
-                markdown: update.content,
-                sourceUrl: update.sourceUrl,
-              });
-              setConversionProgress(100);
-            } else if (update.status === 'error') {
-              setError(update.error);
+            if (data.type === 'update') {
+              const update = data.data;
+              
+              if (update.status === 'progress') {
+                setConversionProgress(update.progress);
+              } else if (update.status === 'done') {
+                setConvertedContent({
+                  title: update.title || 'Converted Document',
+                  markdown: update.content,
+                  sourceUrl: update.sourceUrl,
+                });
+                setConversionProgress(100);
+              } else if (update.status === 'error') {
+                setError(update.error);
+              }
             }
+          } catch (parseError) {
+            console.error('Error parsing JSON:', parseError);
           }
         }
       }
@@ -103,7 +107,7 @@ export function DocsConverter() {
   }
 
   return (
-    <div className="space-y-8">
+    <section className="space-y-8">
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-2">
           <input
@@ -135,15 +139,15 @@ export function DocsConverter() {
       />
 
       {convertedContent && (
-        <div className="space-y-4">
+        <article className="space-y-4">
           <ConvertedContentCard
             title={convertedContent.title}
             markdown={convertedContent.markdown}
             sourceUrl={convertedContent.sourceUrl}
             defaultOpen={true}
           />
-        </div>
+        </article>
       )}
-    </div>
+    </section>
   )
 }

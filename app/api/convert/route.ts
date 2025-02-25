@@ -4,7 +4,9 @@ import { JSDOM } from 'jsdom'
 import TurndownService from 'turndown'
 import { cleanMarkdown, detectLanguage } from '@/lib/markdown-utils'
 
+const MAX_CONTENT_SIZE = 10 * 1024 * 1024 // 10MB
 const encoder = new TextEncoder()
+
 const turndownService = new TurndownService({
   headingStyle: 'atx',
   bulletListMarker: '-',
@@ -22,6 +24,15 @@ turndownService.addRule('heading', {
 
 export async function POST(request: NextRequest) {
   try {
+    // Validate request size
+    const contentLength = Number(request.headers.get('content-length') || 0)
+    if (contentLength > MAX_CONTENT_SIZE) {
+      return new NextResponse(
+        JSON.stringify({ error: 'Request payload too large' }),
+        { status: 413, headers: { 'Content-Type': 'application/json' } }
+      )
+    }
+
     const { url } = await request.json()
     
     if (!url || typeof url !== 'string') {
@@ -54,6 +65,11 @@ export async function POST(request: NextRequest) {
 
           const html = await response.text()
           
+          // Validate HTML size
+          if (html.length > MAX_CONTENT_SIZE) {
+            throw new Error('Content too large to process')
+          }
+
           // Convert HTML to markdown
           controller.enqueue(encoder.encode(JSON.stringify({
             type: 'update',
@@ -65,6 +81,11 @@ export async function POST(request: NextRequest) {
           const mainContent = document.querySelector('main, article, [role="main"]') || document.body
           const markdown = turndownService.turndown(mainContent.innerHTML)
           const cleanedMarkdown = cleanMarkdown(markdown)
+
+          // Validate markdown size
+          if (cleanedMarkdown.length > MAX_CONTENT_SIZE) {
+            throw new Error('Converted content too large')
+          }
 
           // Get title from URL or document
           const title = document.title || url.split('/').pop()?.replace(/[._-]/g, ' ') || 'Converted Document'
