@@ -39,23 +39,39 @@ def clean_for_json(text: str) -> str:
     return text
 
 def chunk_content(content: str, chunk_size: int = 5000) -> list:
-    """Split content into manageable chunks"""
+    """Split content into manageable chunks with smart splitting"""
     chunks = []
     current_chunk = []
     current_size = 0
     
+    # Add header to identify multi-part content
+    is_multipart = len(content) > chunk_size
+    
     for line in content.split('\n'):
         line_size = len(line)
+        
+        # If adding this line would exceed chunk size
         if current_size + line_size > chunk_size and current_chunk:
-            chunks.append('\n'.join(current_chunk))
+            # Try to find a natural break point
+            chunk_text = '\n'.join(current_chunk)
+            
+            # Add part identifier if multipart
+            if is_multipart:
+                chunk_text = f"[Part {len(chunks) + 1}]\n\n" + chunk_text
+            
+            chunks.append(chunk_text)
             current_chunk = [line]
             current_size = line_size
         else:
             current_chunk.append(line)
             current_size += line_size
     
+    # Handle remaining content
     if current_chunk:
-        chunks.append('\n'.join(current_chunk))
+        chunk_text = '\n'.join(current_chunk)
+        if is_multipart:
+            chunk_text = f"[Part {len(chunks) + 1}]\n\n" + chunk_text
+        chunks.append(chunk_text)
     
     return chunks
 
@@ -143,7 +159,7 @@ class DocsConverter:
         return soup
 
     def convert_to_markdown(self, soup: BeautifulSoup) -> str:
-        """Convert cleaned HTML to Markdown"""
+        """Convert cleaned HTML to Markdown with improved multi-part handling"""
         try:
             self._update_progress(70, "Converting to markdown...")
             
@@ -154,7 +170,7 @@ class DocsConverter:
             cleaned_content = clean_for_json(content)
             chunks = chunk_content(cleaned_content)
             
-            # Process chunks and combine
+            # Process chunks and combine with proper part handling
             processed_chunks = []
             total_chunks = len(chunks)
             
@@ -163,9 +179,22 @@ class DocsConverter:
                     70 + (20 * i // total_chunks),
                     f"Processing chunk {i}/{total_chunks}"
                 )
+                
+                # Add separator between parts for better readability
+                if i > 1:
+                    processed_chunks.append("\n---\n")
+                
+                # Add chunk with proper formatting
                 processed_chunks.append(chunk)
             
-            return '\n'.join(processed_chunks)
+            # Join all parts with proper spacing
+            final_content = '\n\n'.join(processed_chunks)
+            
+            # Add total parts information if multiple chunks
+            if total_chunks > 1:
+                final_content = f"Total Parts: {total_chunks}\n\n" + final_content
+            
+            return final_content
             
         except Exception as e:
             raise ConversionError(f"Failed to convert to markdown: {str(e)}")
