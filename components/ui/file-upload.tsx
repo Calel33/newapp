@@ -78,10 +78,10 @@ export const FileUpload = ({
           onChange={(e) => handleFileChange(Array.from(e.target.files || []))}
           className="hidden"
         />
-        <div className="absolute inset-0 [mask-image:radial-gradient(ellipse_at_center,white,transparent)]">
-          <GridPattern />
+        <div className="absolute inset-0 [mask-image:radial-gradient(ellipse_at_center,white,transparent)] dark:opacity-20">
+          <GridPattern width={40} height={40} x="50%" y="50%" strokeWidth={1} />
         </div>
-        <div className="flex flex-col items-center justify-center">
+        <div className="flex flex-col items-center justify-center relative z-10">
           <IconUpload className="h-12 w-12 text-gray-400 dark:text-gray-600 mb-4" />
           <p className="relative z-20 font-sans font-bold text-neutral-700 dark:text-neutral-300 text-xl mb-2">
             Upload file
