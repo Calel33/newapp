@@ -151,5 +151,52 @@ export function formatInlineCode(content: string): string {
       .replace(/^[\d_]+\s*/, '') // Remove line numbers and markers
       .trim();
     return '`' + cleaned + '`';
-  });
-}
+    });
+  }
+  
+  /**
+   * Splits markdown content into sections based on headers
+   * @param content - The markdown content to split
+   * @returns Array of objects containing section names and content
+   */
+  export function splitMarkdownByHeaders(content: string): { name: string; content: string }[] {
+    const headerRegex = /^(#{1,6})\s+(.+)$/gm;
+    const sections: { name: string; content: string }[] = [];
+    let currentSection: { name: string; content: string } | null = null;
+    let lastIndex = 0;
+  
+    // Find all headers and their positions
+    let match: RegExpExecArray | null;
+    const matches: RegExpExecArray[] = [];
+    
+    while ((match = headerRegex.exec(content)) !== null) {
+      matches.push(match);
+    }
+  
+    for (let i = 0; i < matches.length; i++) {
+      const [fullMatch, hashes, headerText] = matches[i];
+      const headerLevel = hashes.length;
+      const sectionName = headerText.trim();
+      
+      // Get content between current header and next header (or end of file)
+      const start = matches[i].index! + fullMatch.length;
+      const end = matches[i + 1]?.index || content.length;
+      const sectionContent = content.slice(start, end).trim();
+  
+      // Create new section
+      sections.push({
+        name: sectionName,
+        content: `#${'#'.repeat(headerLevel - 1)} ${sectionName}\n\n${sectionContent}`
+      });
+    }
+  
+    // If no headers found, return the entire content as one section
+    if (sections.length === 0) {
+      sections.push({
+        name: 'Document',
+        content: content
+      });
+    }
+  
+    return sections;
+  }
